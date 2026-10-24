@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the R2505 manual Wi-Fi/static-IP boot helper through root USB ADB.
+"""Install the R2505 Wi-Fi boot helper with DHCP or a user-supplied static IPv4.
 
 Requires the previously tested /data/test/r2505-wifi.conf and AVA root hook.
 Does not provision Wi-Fi credentials, change ADB authentication or reboot.
@@ -7,6 +7,7 @@ Does not provision Wi-Fi credentials, change ADB authentication or reboot.
 import argparse
 import ipaddress
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import time
@@ -22,9 +23,11 @@ BLOCK = (
 )
 
 WORKER = r'''#!/bin/sh
+MODE='__MODE__'
 ADDRESS='__ADDRESS__'
 CONF=/data/test/r2505-wifi.conf
 LOCK=/tmp/r2505-network.lock
+DHCP_PID=/tmp/r2505-udhcpc.pid
 
 mkdir "$LOCK" 2>/dev/null || exit 0
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
@@ -36,7 +39,7 @@ if [ ! -s "$CONF" ]; then
     exit 1
 fi
 
-echo "Manual network worker started: $ADDRESS"
+echo "Network worker started: $MODE"
 while true; do
     if [ ! -d /sys/class/net/wlan0 ]; then
         sleep 5
@@ -49,7 +52,13 @@ while true; do
         wpa_supplicant -B -Dnl80211 -i wlan0 -c "$CONF"
     fi
     if wpa_cli -i wlan0 status 2>/dev/null | grep -qx 'wpa_state=COMPLETED'; then
-        if ! ip -4 addr show dev wlan0 | grep -Fq "inet $ADDRESS "; then
+        if [ "$MODE" = dhcp ]; then
+            pid=$(cat "$DHCP_PID" 2>/dev/null)
+            if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+                echo "Starting DHCP client"
+                udhcpc -i wlan0 -b -p "$DHCP_PID" -t 5 -T 3
+            fi
+        elif ! ip -4 addr show dev wlan0 | grep -Fq "inet $ADDRESS "; then
             if ip addr replace "$ADDRESS" dev wlan0; then
                 echo "Static address applied: $ADDRESS"
             else
@@ -60,6 +69,38 @@ while true; do
     sleep 5
 done
 '''
+
+
+def prompt(message):
+    print(message, end="", flush=True)
+    with open("/dev/tty", "r") as tty:
+        return tty.readline().strip()
+
+
+def network_settings(mode, address):
+    if mode is None:
+        mode = "static" if address else (prompt("Network mode [dhcp/static] (dhcp): ") or "dhcp")
+    if mode not in ("dhcp", "static"):
+        raise ValueError("Network mode must be dhcp or static")
+    if mode == "dhcp":
+        if address:
+            raise ValueError("--address cannot be used with DHCP")
+        return mode, ""
+    address = address or prompt("Static IPv4 address/prefix: ")
+    if "/" not in address:
+        raise ValueError("Include the prefix length, for example /24")
+    interface = ipaddress.IPv4Interface(address)
+    if (interface.ip.is_unspecified or interface.ip.is_multicast or interface.ip.is_loopback or
+            interface.ip.is_link_local or interface.network.prefixlen == 0):
+        raise ValueError("Invalid LAN address")
+    if interface.network.prefixlen < 31 and interface.ip in (interface.network.network_address,
+                                                    interface.network.broadcast_address):
+        raise ValueError("Cannot use the subnet or broadcast address")
+    return mode, str(interface)
+
+
+def worker_script(mode, address):
+    return WORKER.replace("__MODE__", mode).replace("__ADDRESS__", address)
 
 
 def patch_hook(original):
@@ -79,13 +120,10 @@ def patch_hook(original):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--address", default="192.168.2.11/24")
+    parser.add_argument("--mode", choices=("dhcp", "static"), help="Prompt if omitted; DHCP is the default choice")
+    parser.add_argument("--address", help="Static IPv4 address/prefix; implies static mode")
     args = parser.parse_args()
-    interface = ipaddress.IPv4Interface(args.address)
-    if interface.ip.is_unspecified or interface.ip.is_multicast or interface.ip.is_loopback:
-        raise ValueError("Invalid LAN address")
-    address = str(interface)
-    endpoint = str(interface.ip) + ":4567"
+    mode, address = network_settings(args.mode, args.address)
 
     def run(arguments, timeout=20):
         result = subprocess.run(arguments, text=True, capture_output=True, timeout=timeout)
@@ -100,6 +138,13 @@ def main():
     if shell("id -u") != "0":
         raise RuntimeError("Root USB ADB is required")
     shell("test -s /data/test/r2505-wifi.conf && test -s /data/test/adb_keys")
+    if mode == "dhcp":
+        shell("command -v udhcpc >/dev/null")
+    # Verify the currently reachable address, independently of the next boot's mode.
+    current = re.findall(r"\binet\s+(\d+\.\d+\.\d+\.\d+)/", shell("ip -4 addr show dev wlan0"))
+    if len(current) != 1:
+        raise RuntimeError("Expected one current IPv4 address on wlan0; no startup files changed")
+    endpoint = str(ipaddress.IPv4Address(current[0])) + ":4567"
     print(run(["adb", "connect", endpoint]))
     if run(["adb", "-s", endpoint, "shell", "id -u"]) != "0":
         raise RuntimeError("Network root ADB verification failed; no startup files changed")
@@ -111,7 +156,7 @@ def main():
         original = (local / "ava.sh").read_text()
         updated = patch_hook(original)
         (local / "ava.sh").write_text(updated)
-        (local / "network.sh").write_text(WORKER.replace("__ADDRESS__", address))
+        (local / "network.sh").write_text(worker_script(mode, address))
 
         backup = "/data/test/network-backups/" + time.strftime("%Y%m%d-%H%M%S")
         shell("umask 077; mkdir -p '" + backup + "' && cp -p " + HOOK + " '" + backup + "/ava.sh'")
@@ -123,12 +168,13 @@ def main():
               "chmod 600 /data/test/r2505-wifi.conf")
         shell("mv " + HELPER + ".new " + HELPER + " && mv " + HOOK + ".new " + HOOK + " && sync")
 
-    # On first installation this starts the helper. A running instance holds its lock.
-    shell("sh " + HELPER + " >/data/log/r2505-network.log 2>&1 </dev/null &")
     print("PASS: boot hook installed; AVA and ADB authentication startup preserved")
     print("BACKUP: " + backup)
-    print("ADDRESS: " + address)
-    print("ADB: " + endpoint)
+    print("NEXT BOOT MODE: " + mode)
+    if address:
+        print("NEXT BOOT ADDRESS: " + address)
+    print("CURRENT ADB: " + endpoint)
+    print("Current networking was not restarted. Settings apply on the next boot.")
     print("No reboot performed. Cold-boot verification is still required.")
 
 

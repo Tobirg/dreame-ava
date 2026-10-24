@@ -15,39 +15,75 @@ No daemon replacement or authentication change is needed for this setup.
 - Working root USB ADB and the established `/data/test/ava.sh` root hook.
 - Previously tested `/data/test/r2505-wifi.conf` for the intended Wi-Fi network.
 - The host's public key is already trusted through `/data/test/adb_keys`.
-- `192.168.2.11/24` is already reachable and available for this robot.
-- Reserve/exclude the address in the router's DHCP configuration.
+- A working current IPv4 address on `wlan0`, used to verify TCP ADB.
+- For static mode, choose an unused address and reserve/exclude it in the router.
+- A router-side DHCP reservation is compatible with DHCP mode; it does not require
+  a static IP in the robot or a hardcoded address in this repository.
 
 ```bash
-python3 tools/install_network.py --address 192.168.2.11/24
+python3 tools/install_network.py
 ```
 
-The installer verifies root access over both USB and TCP before altering startup.
+The installer prompts for `dhcp` (default) or `static`. Static mode prompts for
+an IPv4 address with prefix length. For unattended use:
+
+```bash
+python3 tools/install_network.py --mode dhcp
+python3 tools/install_network.py --mode static --address "$ROBOT_CIDR"
+```
+
+Set `ROBOT_CIDR` to your chosen address/prefix for the second command. No personal
+network address is included in the installer. The selected mode and address stay
+in the helper installed on your robot.
+
+The installer discovers the current address over USB and verifies root access
+over both USB and TCP before altering startup. This preflight address is separate
+from the DHCP/static configuration being prepared for the next boot.
 It backs up the existing hook and helper under `/data/test/network-backups/`,
 stages and syntax-checks the new scripts, then adds one background helper call
 before AVA launch. The AVA and delayed ADB authorization restart code are preserved.
 Credentials are read from the existing robot file; they are not downloaded or
-printed by this installer. The installer does not reboot.
+printed by this installer. The installer does not restart current networking or reboot. The selected
+network settings take effect on the next boot, preserving the active session
+while installing or switching modes.
 
-The helper waits for `wlan0`, starts `wpa_supplicant` when absent, and applies
-the static address after association. It checks every five seconds. It does not
-run DHCP, add a default gateway or change DNS. It does not restart an existing
-supplicant. This manual setup is for the reset research robot; app provisioning
+The helper waits for `wlan0` and starts `wpa_supplicant` when absent. After
+association, DHCP mode starts `udhcpc` with its native default lease script,
+allowing DHCP to configure address, routes and DNS. It keeps the DHCP client
+running for lease renewal. Static mode applies the user-supplied address and
+prefix; it does not add a default gateway or DNS settings. The helper checks
+every five seconds and does not restart an existing supplicant. This manual setup is for the reset research robot; app provisioning
 or another Wi-Fi manager may conflict and needs separate handling.
 
 ## Verify after reboot
 
-Keep USB attached during the first reboot. Wait about one minute, then use:
+Persistent DHCP/static startup still needs hardware verification. The earlier
+manual DHCP attempt timed out on the research robot; DHCP mode must be tested
+before relying on it. A router reservation determines the expected lease but
+does not itself fix a DHCP exchange failure.
+
+Keep USB attached during the first reboot. Wait about one minute, find the
+address using `adb -d shell "ip -4 addr show dev wlan0"` or the router, and set
+`ROBOT_IP` accordingly. Then use:
 
 ```bash
-adb connect 192.168.2.11:4567
-adb -s 192.168.2.11:4567 shell id
-adb -s 192.168.2.11:4567 shell 'cat /data/log/r2505-network.log; cat /data/log/adb-bootstrap.log'
+adb connect "$ROBOT_IP:4567"
+adb -s "$ROBOT_IP:4567" shell id
+adb -s "$ROBOT_IP:4567" shell 'cat /data/log/r2505-network.log; cat /data/log/adb-bootstrap.log'
 ```
 
 If network access fails, inspect those logs using `adb -d shell` through USB.
 Do not consider persistence verified until TCP root access works after boot.
 Keep ADB limited to a trusted LAN; the authorized shell runs as root.
+
+## Host-only checks
+
+```bash
+python3 -m unittest discover -s test -p '*_test.py'
+```
+
+These check mode selection, address validation and generated shell syntax.
+They do not establish DHCP or boot behavior on hardware.
 
 ## Roll back
 
