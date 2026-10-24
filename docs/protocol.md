@@ -94,5 +94,6 @@ the cloud. The successful local `get_properties` tests used AVA instead.
 
 Initial analysis used locally supplied `x50-iot-analysis.tar` and
 `x50-ava-analysis.tar`, followed by the owner's hardware tests on 2026-10-24.
-Archives and proprietary binaries are not redistributed. Firmware version and
-binary fingerprints still need to be recorded for reproducible build matching.
+Archives and proprietary binaries are not redistributed. The firmware version
+is still unknown; binary fingerprints and further dispatch analysis are in the
+[static analysis notes](research/ava-dispatch.md).

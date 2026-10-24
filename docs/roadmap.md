@@ -11,6 +11,9 @@
 ## 2. Discover capabilities
 
 - Inventory registered property and action handlers from the local binaries.
+- Initial constructor inventory is available in
+  [the static research notes](research/registration-inventory.md); runtime
+  availability, argument semantics and handler side effects still need review.
 - Maintain separate evidence for handler presence and successful hardware use.
 - List X50-specific settings and station features, including unsupported items.
 - Investigate subscription/event paths before selecting a polling strategy.

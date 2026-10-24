@@ -23,6 +23,8 @@ operation have not been verified. Only R2505 has been tested.
 - [R2505 observations and property table](docs/devices/r2505.md)
 - [Research roadmap](docs/roadmap.md)
 - [Transport API and limitations](docs/transport.md)
+- [Static dispatch, event and map research](docs/research/ava-dispatch.md)
+- [Constructor registration inventory](docs/research/registration-inventory.md)
 - [Contributing research](CONTRIBUTING.md)
 
 ## Read-only probe from a Raspberry Pi

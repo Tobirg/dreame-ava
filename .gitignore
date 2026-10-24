@@ -7,3 +7,5 @@ coverage/
 *.img
 *.bin
 private/
+.venv/
+__pycache__/
