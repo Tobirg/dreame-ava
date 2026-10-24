@@ -1,0 +1,10 @@
+{
+  "name": "dreame-ava",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local Dreame AVA protocol research and experimental transport",
+  "license": "MIT",
+  "main": "AvaTransport.js",
+  "scripts": {"test": "node --test test/*.test.js", "probe": "node probe.js --adb"},
+  "engines": {"node": ">=18"}
+}

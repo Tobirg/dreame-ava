@@ -1,0 +1,9 @@
+node_modules/
+coverage/
+*.log
+*.tar
+*.tar.gz
+*.zip
+*.img
+*.bin
+private/
